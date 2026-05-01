@@ -41,3 +41,17 @@ export function requireAuth(request: Request) {
 export function getAuthToken(): string | null {
     return localStorage.getItem(ACCESS_TOKEN_KEY);
 }
+
+export function handleUnauthorizedResponse(response: Response) {
+    if (response.status !== 401) {
+        return false;
+    }
+
+    clearClientAuth();
+
+    if (typeof window !== "undefined") {
+        window.location.href = "/signin";
+    }
+
+    return true;
+}

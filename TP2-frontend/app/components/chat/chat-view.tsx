@@ -7,6 +7,11 @@ import type { ChatMessage } from "~/components/chat/types";
 
 type ChatViewProps = {
     bottomRef: RefObject<HTMLDivElement | null>;
+    documentError: string;
+    documentName: string | null;
+    fileInputRef: RefObject<HTMLInputElement | null>;
+    handleDocumentChange: (event: ChangeEvent<HTMLInputElement>) => void;
+    handlePickDocument: () => void;
     handlePromptChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
     handleSend: () => Promise<void>;
     hasChatContent: boolean;
@@ -14,6 +19,7 @@ type ChatViewProps = {
     isEmptyState: boolean;
     isLoadingMessages: boolean;
     isSendingCurrent: boolean;
+    isUploadingDocument: boolean;
     messages: ChatMessage[];
     prompt: string;
     showEmptyState: boolean;
@@ -23,6 +29,11 @@ type ChatViewProps = {
 
 export default function ChatView({
     bottomRef,
+    documentError,
+    documentName,
+    fileInputRef,
+    handleDocumentChange,
+    handlePickDocument,
     handlePromptChange,
     handleSend,
     hasChatContent,
@@ -30,6 +41,7 @@ export default function ChatView({
     isEmptyState,
     isLoadingMessages,
     isSendingCurrent,
+    isUploadingDocument,
     messages,
     prompt,
     showEmptyState,
@@ -66,8 +78,14 @@ export default function ChatView({
                                 isBrandVisible={isBrandVisible}
                                 isEmptyState={isEmptyState}
                                 isSendingCurrent={isSendingCurrent}
+                                isUploadingDocument={isUploadingDocument}
+                                documentError={documentError}
+                                documentName={documentName}
+                                fileInputRef={fileInputRef}
                                 prompt={prompt}
                                 textareaRef={textareaRef}
+                                onDocumentChange={handleDocumentChange}
+                                onPickDocument={handlePickDocument}
                                 onPromptChange={handlePromptChange}
                                 onSend={handleSend}
                             />
@@ -95,8 +113,14 @@ export default function ChatView({
                         isBrandVisible={isBrandVisible}
                         isEmptyState={isEmptyState}
                         isSendingCurrent={isSendingCurrent}
+                        isUploadingDocument={isUploadingDocument}
+                        documentError={documentError}
+                        documentName={documentName}
+                        fileInputRef={fileInputRef}
                         prompt={prompt}
                         textareaRef={textareaRef}
+                        onDocumentChange={handleDocumentChange}
+                        onPickDocument={handlePickDocument}
                         onPromptChange={handlePromptChange}
                         onSend={handleSend}
                     />

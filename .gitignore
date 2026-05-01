@@ -71,6 +71,7 @@ ENV/
 *.db
 *.db-journal
 *.cache
+.rag-cache/
 
 # Generated uploads / temporary assets
 uploads/

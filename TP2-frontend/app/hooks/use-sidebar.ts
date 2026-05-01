@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import type { Conversation, DropdownPos } from "~/components/sidebar/types";
-import { clearClientAuth, getAuthToken } from "~/utils/auth";
+import { clearClientAuth, getAuthToken, handleUnauthorizedResponse } from "~/utils/auth";
 import { API_BASE } from "~/utils/api";
 
 function getDisplayNameFromStorageUser(user: Record<string, unknown> | null) {
@@ -77,6 +77,10 @@ export function useSidebar() {
             const response = await fetch(`${API_BASE}/conversations`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
+
+            if (handleUnauthorizedResponse(response)) {
+                return;
+            }
 
             if (!response.ok) {
                 return;

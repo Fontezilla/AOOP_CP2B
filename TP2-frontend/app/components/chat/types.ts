@@ -7,6 +7,18 @@ export type Car = {
     fuel: string;
     image_url: string;
     url: string;
+    brand?: string | null;
+    model?: string | null;
+    month?: string | null;
+    transmission?: string | null;
+    cilindrada?: string | null;
+    power_cv?: number | null;
+    color?: string | null;
+    doors?: number | null;
+    seats?: number | null;
+    traction?: string | null;
+    section?: string | null;
+    vehicle_type?: string | null;
 };
 
 export type ChatMessage = {

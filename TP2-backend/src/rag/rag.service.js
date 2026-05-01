@@ -1,85 +1,73 @@
-import { ChatOllama } from "@langchain/community/chat_models/ollama";
-import { OllamaEmbeddings } from "@langchain/community/embeddings/ollama";
-import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
-import { MemoryVectorStore } from "langchain/vectorstores/memory";
-import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
-import path from "path";
-
-let vectorStore = null;
+import { supabaseAdmin } from "../config/supabase.js";
+import { askRagWithLlm, askRagWithUserChunks, checkLlmHealth } from "../llm/llm-client.js";
 
 export async function initRAG() {
-    console.log("1 - start");
-
-    const filePath = path.join(process.cwd(), "rag/documents/manual.pdf");
-    console.log("2 - caminho:", filePath);
-
-    const loader = new PDFLoader(filePath);
-
-    const docs = await loader.load();
-    console.log("3 - PDF carregado:", docs.length);
-
-    const splitter = new RecursiveCharacterTextSplitter({
-        chunkSize: 500,
-        chunkOverlap: 50,
-    });
-
-    const splitDocs = await splitter.splitDocuments(docs);
-    console.log("4 - split feito:", splitDocs.length);
-
-    const limitedDocs = splitDocs.slice(0, 100);
-    console.log("5 - docs limitados:", limitedDocs.length);
-
-    const embeddings = new OllamaEmbeddings({
-        model: "nomic-embed-text",
-    });
-
-    console.log("6 - embeddings ready");
-
-    vectorStore = await MemoryVectorStore.fromDocuments(
-        limitedDocs,
-        embeddings
-    );
-
-    console.log("7 - RAG inicializado com sucesso");
+    return checkLlmHealth();
 }
 
 export async function askRAG(question) {
-    if (!vectorStore) {
-        throw new Error("RAG não inicializado");
+    return askRagWithLlm(question);
+}
+
+function parseEmbedding(value) {
+    if (Array.isArray(value)) {
+        return value.map(Number).filter(Number.isFinite);
     }
 
-    const retriever = vectorStore.asRetriever();
+    if (typeof value !== "string") {
+        return [];
+    }
 
-    const relevantDocs = await retriever.getRelevantDocuments(question);
+    return value
+        .replace(/^\[/, "")
+        .replace(/\]$/, "")
+        .split(",")
+        .map((item) => Number.parseFloat(item.trim()))
+        .filter(Number.isFinite);
+}
 
-    const context = relevantDocs
-        .map((doc) => doc.pageContent)
-        .join("\n\n");
+export async function getConversationRagChunks(userId, conversationId) {
+    if (!userId || !conversationId) {
+        return [];
+    }
 
-    const model = new ChatOllama({
-        model: "mistral",
-    });
+    const { data: documents, error: docsError } = await supabaseAdmin
+        .from("documents")
+        .select("id, file_name")
+        .eq("user_id", userId)
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: false })
+        .limit(1);
 
-    const prompt = `
-Responde em Português de Portugal (pt-PT), evita expressões do português do Brasil.
+    if (docsError || !Array.isArray(documents) || documents.length === 0) {
+        return [];
+    }
 
-Usa apenas a informação do contexto.
+    const document = documents[0];
+    const { data: chunks, error: chunksError } = await supabaseAdmin
+        .from("document_chunks")
+        .select("content, embedding")
+        .eq("document_id", document.id);
 
-Se não souberes, diz que não tens informação suficiente.
+    if (chunksError || !Array.isArray(chunks)) {
+        return [];
+    }
 
-Contexto:
-${context}
+    return chunks
+        .map((chunk, index) => ({
+            page_content: chunk.content,
+            embedding: parseEmbedding(chunk.embedding),
+            metadata: {
+                source: document.file_name,
+                document_id: document.id,
+                user_document: true,
+                chunk: index + 1,
+            },
+        }))
+        .filter((chunk) => chunk.page_content && chunk.embedding.length > 0);
+}
 
-Pergunta:
-${question}
-
-Resposta:
-`;
-
-    const response = await model.invoke(prompt);
-
-    return {
-        answer: response.content,
-        sources: relevantDocs.slice(0, 3),
-    };
+export async function askRAGForConversation(question, userId, conversationId) {
+    const userChunks = await getConversationRagChunks(userId, conversationId);
+    return askRagWithUserChunks(question, userChunks);
 }

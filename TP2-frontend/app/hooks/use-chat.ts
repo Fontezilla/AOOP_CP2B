@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useNavigate, useParams } from "react-router";
 import type { ApiMessage, ChatMessage, StoredAssistantPayload } from "~/components/chat/types";
-import { getAuthToken } from "~/utils/auth";
+import { getAuthToken, handleUnauthorizedResponse } from "~/utils/auth";
 import { API_BASE } from "~/utils/api";
 
 const BRAND_NAME = "AutoMatch";
@@ -101,8 +101,12 @@ export function useChat() {
     const [isBrandVisible, setIsBrandVisible] = useState(false);
     const [brandAnimationCycle, setBrandAnimationCycle] = useState(0);
     const [showEmptyState, setShowEmptyState] = useState(true);
+    const [documentName, setDocumentName] = useState<string | null>(null);
+    const [documentError, setDocumentError] = useState("");
+    const [uploadingDocumentConversationId, setUploadingDocumentConversationId] = useState<string | null>(null);
 
     const bottomRef = useRef<HTMLDivElement | null>(null);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     const currentConversationKeyRef = useRef(getConversationKey(conversationId));
     const currentViewVersionRef = useRef(0);
@@ -113,6 +117,10 @@ export function useChat() {
     const isSendingCurrent = Boolean(
         sendingConversations[currentConversationKey] ||
         (currentConversationId && pendingConversationKeys[currentConversationId])
+    );
+    const isUploadingDocument = Boolean(
+        currentConversationId &&
+        uploadingDocumentConversationId === currentConversationId
     );
     const isNewChat = currentConversationKey === NEW_CHAT_KEY;
     const isEmptyState = messages.length === 0 && !isLoadingMessages && !isSendingCurrent;
@@ -174,6 +182,60 @@ export function useChat() {
         setBrandAnimationCycle((prev) => prev + 1);
     }, []);
 
+    const createConversation = useCallback(async (title: string, token: string) => {
+        const response = await fetch(`${API_BASE}/conversations`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ title }),
+        });
+
+        if (handleUnauthorizedResponse(response)) {
+            throw new Error("Sessao expirada");
+        }
+
+        if (!response.ok) {
+            throw new Error("Erro ao criar conversa");
+        }
+
+        const data = await response.json() as { id: string };
+        const refreshSidebar = (window as unknown as Record<string, unknown>).__sidebarRefreshConversations;
+
+        if (typeof refreshSidebar === "function") {
+            (refreshSidebar as () => void)();
+        }
+
+        return data.id;
+    }, []);
+
+    const loadCurrentDocument = useCallback(async (convId: string | null = currentConversationId) => {
+        const token = getAuthToken();
+        if (!token || !convId) {
+            setDocumentName(null);
+            return;
+        }
+
+        try {
+            const params = new URLSearchParams({ conversation_id: convId });
+            const response = await fetch(`${API_BASE}/documents/current?${params.toString()}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+
+            if (handleUnauthorizedResponse(response) || !response.ok) {
+                return;
+            }
+
+            const data = await response.json() as { file_name?: string } | null;
+
+            if (currentConversationKeyRef.current === convId) {
+                setDocumentName(data?.file_name || null);
+            }
+        } catch {
+        }
+    }, [currentConversationId]);
+
     const loadMessages = useCallback(async (convId: string) => {
         const token = getAuthToken();
         if (!token) {
@@ -190,6 +252,10 @@ export function useChat() {
             const response = await fetch(`${API_BASE}/conversations/${convId}/messages`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
+
+            if (handleUnauthorizedResponse(response)) {
+                return;
+            }
 
             if (!response.ok) {
                 return;
@@ -233,6 +299,16 @@ export function useChat() {
 
         return () => window.clearTimeout(timeoutId);
     }, [isEmptyState]);
+
+    useEffect(() => {
+        setDocumentName(null);
+        setDocumentError("");
+
+        if (currentConversationId) {
+            void loadCurrentDocument(currentConversationId);
+            return;
+        }
+    }, [currentConversationId, loadCurrentDocument]);
 
     useEffect(() => {
         if (!isNewChat) {
@@ -336,34 +412,99 @@ export function useChat() {
         }
     }, []);
 
-    const createConversation = useCallback(async (title: string, token: string) => {
-        const response = await fetch(`${API_BASE}/conversations`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ title }),
-        });
-
-        if (!response.ok) {
-            throw new Error("Erro ao criar conversa");
-        }
-
-        const data = await response.json() as { id: string };
-        const refreshSidebar = (window as unknown as Record<string, unknown>).__sidebarRefreshConversations;
-
-        if (typeof refreshSidebar === "function") {
-            (refreshSidebar as () => void)();
-        }
-
-        return data.id;
+    const handlePickDocument = useCallback(() => {
+        fileInputRef.current?.click();
     }, []);
+
+    const handleDocumentChange = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+
+        if (!file) {
+            return;
+        }
+
+        setDocumentError("");
+
+        if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+            setDocumentError("Escolhe um PDF.");
+            return;
+        }
+
+        const token = getAuthToken();
+        if (!token) {
+            handleUnauthorizedResponse(new Response(null, { status: 401 }));
+            return;
+        }
+
+        let uploadConversationId = currentConversationId;
+
+        try {
+            if (!uploadConversationId) {
+                uploadConversationId = await createConversation(file.name.replace(/\.pdf$/i, "").slice(0, 60), token);
+                navigate(`/chat/${uploadConversationId}`, { replace: true });
+            }
+
+            setUploadingDocumentConversationId(uploadConversationId);
+
+            const contentBase64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const result = String(reader.result || "");
+                    resolve(result.includes(",") ? result.split(",")[1] : result);
+                };
+                reader.onerror = () => reject(new Error("Erro ao ler PDF"));
+                reader.readAsDataURL(file);
+            });
+
+            const response = await fetch(`${API_BASE}/documents/upload`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                    fileName: file.name,
+                    contentBase64,
+                    conversationId: uploadConversationId,
+                }),
+            });
+
+            if (handleUnauthorizedResponse(response)) {
+                return;
+            }
+
+            let data: { error?: string; document?: { file_name?: string } } = {};
+            try {
+                data = await response.json();
+            } catch {
+            }
+
+            if (!response.ok) {
+                if (currentConversationKeyRef.current === uploadConversationId) {
+                    setDocumentError(data.error || "Nao foi possivel processar o PDF.");
+                }
+                return;
+            }
+
+            if (currentConversationKeyRef.current === uploadConversationId) {
+                setDocumentName(data.document?.file_name || file.name);
+            }
+        } catch {
+            if (!uploadConversationId || currentConversationKeyRef.current === uploadConversationId) {
+                setDocumentError("Erro ao enviar PDF.");
+            }
+        } finally {
+            setUploadingDocumentConversationId((current) => (
+                current === uploadConversationId ? null : current
+            ));
+        }
+    }, [createConversation, currentConversationId, navigate]);
 
     const handleSend = useCallback(async () => {
         const promptText = prompt.trim();
 
-        if (!promptText || isSendingCurrent) {
+        if (!promptText || isSendingCurrent || isUploadingDocument) {
             return;
         }
 
@@ -413,6 +554,10 @@ export function useChat() {
                     conversation_id: requestConversationId ?? undefined,
                 }),
             });
+
+            if (handleUnauthorizedResponse(response)) {
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error("Erro na resposta do servidor");
@@ -499,6 +644,7 @@ export function useChat() {
         currentConversationId,
         currentConversationKey,
         isSendingCurrent,
+        isUploadingDocument,
         loadMessages,
         markConversationPending,
         navigate,
@@ -509,12 +655,18 @@ export function useChat() {
 
     return {
         bottomRef,
+        documentError,
+        documentName,
+        fileInputRef,
+        handleDocumentChange,
+        handlePickDocument,
         handlePromptChange,
         handleSend,
         isBrandVisible,
         isEmptyState,
         isLoadingMessages,
         isSendingCurrent,
+        isUploadingDocument,
         hasChatContent,
         messages,
         prompt,

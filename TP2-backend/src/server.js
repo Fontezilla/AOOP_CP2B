@@ -9,8 +9,7 @@ import userRoutes from "./routes/user.routes.js";
 import chatRoutes from "./routes/chat.routes.js";
 import ragRoutes from "./routes/rag.routes.js";
 import conversationRoutes from "./routes/conversation.routes.js";
-
-import { initRAG } from "./rag/rag.service.js";
+import documentRoutes from "./routes/document.routes.js";
 
 dotenv.config();
 
@@ -26,7 +25,7 @@ app.use(
     })
 );
 
-app.use(express.json({ limit: "10kb" }));
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "15mb" }));
 app.use(morgan("dev"));
 
 app.get("/api/health", (req, res) => {
@@ -40,8 +39,7 @@ app.use("/api/user", userRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/rag", ragRoutes);
 app.use("/api/conversations", conversationRoutes);
-
-await initRAG();
+app.use("/api/documents", documentRoutes);
 
 app.use((req, res) => {
     res.status(404).json({
