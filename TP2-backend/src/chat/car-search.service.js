@@ -2,11 +2,9 @@ import { supabaseAdmin } from "../config/supabase.js";
 import { analyzeQueryWithLlm } from "../llm/llm-client.js";
 
 const SEARCH_PROFILE_TTL_MS = 5 * 60 * 1000;
-const CARS_INVENTORY_TTL_MS = 10 * 60 * 1000;
 const ANALYSIS_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_ANALYSIS_CACHE_ENTRIES = 200;
 const ANALYSIS_CACHE_VERSION = "v10";
-const INVENTORY_PAGE_SIZE = 1000;
 const SEARCH_PHRASE_MAX_TOKENS = 3;
 const MAX_REPLY_LIST_ITEMS = 12;
 
@@ -89,9 +87,6 @@ const GENERIC_SEARCH_STOPWORDS = new Set([
 let cachedCarsSearchProfile = null;
 let cachedCarsSearchProfileAt = 0;
 let carsSearchProfilePromise = null;
-let cachedCarsInventory = null;
-let cachedCarsInventoryAt = 0;
-let carsInventoryPromise = null;
 const analysisCache = new Map();
 
 function normalizeWhitespace(value = "") {
@@ -789,45 +784,6 @@ function inferDeterministicFilters(rawMessage = "", profile = getEmptyCarsSearch
     return { exactFilters };
 }
 
-function hasObjectEntries(value) {
-    return value && typeof value === "object" && Object.keys(value).length > 0;
-}
-
-function isLikelyCarInventoryQuery(rawMessage = "") {
-    const normalized = getNormalizedMessage(rawMessage);
-
-    const hasInventoryNoun = /\b(carro|carros|viatura|viaturas|automovel|automoveis|veiculo|veiculos)\b/.test(normalized);
-    const hasSearchAction = /\b(da|dame|mostra|mostrar|procura|procurar|quero|queria|tens|tem|lista|listar|encontra|encontrar)\b/.test(normalized);
-    const hasTechnicalSignal = /\b(avaria|problema|luz|oleo|oleo|pressao|pneu|motor|trav[aã]o|bateria|manutencao|manutenção|manual de|como)\b/.test(normalized);
-
-    return hasInventoryNoun && hasSearchAction && !hasTechnicalSignal;
-}
-
-function buildFastCarSearchAnalysis(rawMessage = "", profile = getEmptyCarsSearchProfile()) {
-    const deterministic = inferDeterministicFilters(rawMessage, profile);
-    const deterministicRanges = inferGenericDeterministicRanges(rawMessage, profile);
-
-    if (
-        !hasObjectEntries(deterministic.exactFilters) &&
-        !hasObjectEntries(deterministicRanges) &&
-        !isLikelyCarInventoryQuery(rawMessage)
-    ) {
-        return null;
-    }
-
-    return normalizeAnalysis(
-        {
-            intent: "car_search",
-            exactFilters: deterministic.exactFilters,
-            rangeFilters: deterministicRanges,
-            searchText: rawMessage,
-            extraTerms: [],
-        },
-        rawMessage,
-        profile,
-    );
-}
-
 function removeStructuredFilterNoise(analysis, terms = []) {
     const exactFilters = analysis?.exactFilters || {};
     const blockedSignatures = new Set();
@@ -924,24 +880,6 @@ function countSemanticSetOverlap(leftSet, rightSet) {
     }
 
     return overlap;
-}
-
-function getPromptableDistinctTextValues(profile, maxDistinctValues = 20) {
-    const entries = Object.entries(profile?.distinctTextValuesByColumn || {})
-        .filter(([, values]) => Array.isArray(values) && values.length > 0 && values.length <= maxDistinctValues);
-
-    return Object.fromEntries(entries);
-}
-
-function serializePromptableDistinctValues(profile) {
-    const promptableValues = getPromptableDistinctTextValues(profile);
-    const lines = Object.entries(promptableValues).map(
-        ([column, values]) => `  - ${column}: ${values.join(" | ")}`,
-    );
-
-    return lines.length > 0
-        ? lines.join("\n")
-        : "  - sem valores categóricos resumidos";
 }
 
 function isMetadataColumn(column = "") {
@@ -1108,58 +1046,6 @@ async function loadCarsSearchProfile() {
         });
 
     return carsSearchProfilePromise;
-}
-
-function serializeColumns(columns = []) {
-    return columns.length > 0 ? columns.join(", ") : "nenhuma inferida";
-}
-
-function buildAnalysisPrompt(message, profile) {
-    return `
-Analisa a mensagem de um utilizador de uma plataforma automovel e devolve apenas JSON valido.
-
-Contexto:
-- A tabela cars tem estas colunas textuais pesquisaveis: ${serializeColumns(profile.searchableTextColumns)}.
-- As colunas textuais/categoricas mais adequadas para filtros exatos sao: ${serializeColumns(profile.filterableTextColumns)}.
-- As colunas numericas para igualdade ou intervalos sao: ${serializeColumns(profile.numericColumns)}.
-- Valores reais conhecidos para colunas categoricas com poucos valores:
-${serializePromptableDistinctValues(profile)}
-- "car_search" significa que o utilizador quer encontrar carros do inventario real da plataforma.
-- "technical_question" significa duvidas de manutencao, avarias, manuais, luzes, problemas ou explicacoes tecnicas.
-- "unknown" significa que a mensagem e ambigua e nao da para decidir com seguranca.
-
-Regras:
-- Usa apenas nomes de colunas reais.
-- Quando houver valores reais conhecidos para uma coluna categórica, escolhe preferencialmente um desses valores nas exactFilters.
-- Se o utilizador escrever o valor em portugues, plural, feminino/masculino, abreviado ou noutra variante, mapeia para o valor real mais proximo do inventario.
-- Extrai filtros apenas quando estiverem explicitos ou fortemente implicitos.
-- "exactFilters" e um objeto com pares coluna->valor para filtros exatos/categoricos.
-- Em colunas numericas, usa "exactFilters" quando o valor for claramente exato, como "5 seats" ou "2 doors".
-- Usa "rangeFilters" quando o utilizador der limites, como "ate 20000", "desde 2019" ou "entre 90 e 120 cv".
-- "searchText" deve conter apenas termos livres uteis para pesquisa textual e que nao estejam ja representados nos filtros.
-- "extraTerms" e uma lista curta opcional para termos adicionais de pesquisa.
-- Usa null quando nao houver valor.
-- Nao inventes marcas, modelos, colunas ou limites numericos.
-
-Schema:
-{
-  "intent": "car_search" | "technical_question" | "unknown",
-  "exactFilters": {
-    "<coluna>": "valor" | 123
-  },
-  "rangeFilters": {
-    "<coluna_numerica>": {
-      "min": number | null,
-      "max": number | null
-    }
-  },
-  "searchText": string | null,
-  "extraTerms": string[]
-}
-
-Mensagem:
-${message}
-`;
 }
 
 function normalizeExactFilters(rawExactFilters, profile) {
@@ -1668,23 +1554,12 @@ export async function getCarsSearchProfile() {
     return loadCarsSearchProfile();
 }
 
-export async function getCarsInventory() {
-    return loadCarsInventory();
-}
-
 export async function analyzeUserQuery(message, profile = null) {
     const effectiveProfile = profile || await loadCarsSearchProfile();
     const cachedAnalysis = getCachedAnalysis(message);
 
     if (cachedAnalysis) {
         return cachedAnalysis;
-    }
-
-    const fastAnalysis = buildFastCarSearchAnalysis(message, effectiveProfile);
-    if (fastAnalysis) {
-        const resolvedAnalysis = resolveAnalysisWithProfile(fastAnalysis, message, effectiveProfile);
-        setCachedAnalysis(message, resolvedAnalysis);
-        return resolvedAnalysis;
     }
 
     try {
@@ -1772,96 +1647,9 @@ export function applyCarFilters(query, analysis, profile, rawMessage = "") {
     return nextQuery;
 }
 
-function matchesStructuredFilters(car, analysis) {
-    for (const [column, value] of Object.entries(analysis?.exactFilters || {})) {
-        if (typeof value === "number") {
-            if (getSafeNumericValue(car?.[column]) !== value) {
-                return false;
-            }
-            continue;
-        }
-
-        if (Array.isArray(value)) {
-            if (!value.some((item) => matchesTextFilter(car?.[column], item))) {
-                return false;
-            }
-            continue;
-        }
-
-        if (!matchesTextFilter(car?.[column], value)) {
-            return false;
-        }
-    }
-
-    for (const [column, range] of Object.entries(analysis?.rangeFilters || {})) {
-        const numericValue = getSafeNumericValue(car?.[column]);
-
-        if (numericValue === null) {
-            return false;
-        }
-
-        if (range?.min !== null && range?.min !== undefined && numericValue < range.min) {
-            return false;
-        }
-
-        if (range?.max !== null && range?.max !== undefined && numericValue > range.max) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 function hasAlternativeFilterGroups(analysis) {
     return Array.isArray(analysis?.alternativeFilterGroups) &&
         analysis.alternativeFilterGroups.length > 0;
-}
-
-function matchesAlternativeFilterGroups(car, analysis) {
-    return (analysis?.alternativeFilterGroups || []).some((group) =>
-        matchesStructuredFilters(car, {
-            exactFilters: {
-                ...(analysis?.exactFilters || {}),
-                ...(group?.exactFilters || {}),
-            },
-            rangeFilters: {
-                ...(analysis?.rangeFilters || {}),
-                ...(group?.rangeFilters || {}),
-            },
-        }),
-    );
-}
-
-function matchesFreeText(car, fragments, profile) {
-    if (fragments.length === 0) {
-        return true;
-    }
-
-    const searchableColumns = profile?.searchableTextColumns || [];
-
-    return fragments.some((fragment) =>
-        searchableColumns.some((column) => normalizeComparableValue(car?.[column]).includes(fragment)),
-    );
-}
-
-export function searchCars(cars = [], analysis, profile, rawMessage = "") {
-    if (!Array.isArray(cars) || cars.length === 0) {
-        return [];
-    }
-
-    const effectiveSearchFragments = getEffectiveSearchFragments(analysis, rawMessage);
-
-    if (hasAlternativeFilterGroups(analysis)) {
-        return cars.filter((car) =>
-            matchesAlternativeFilterGroups(car, analysis) &&
-            matchesFreeText(car, effectiveSearchFragments, profile),
-        );
-    }
-
-    return cars.filter((car) =>
-        matchesStructuredFilters(car, analysis) &&
-        matchesFreeText(car, effectiveSearchFragments, profile),
-    );
 }
 
 export function finalizeCarSearchResults(
@@ -1902,7 +1690,7 @@ export function finalizeCarSearchResults(
     return rankedCars.map(({ car }) => car);
 }
 
-export function isCarSearchIntent(analysis, cars = []) {
+export function isCarSearchIntent(analysis) {
     if (analysis?.intent === "car_search") {
         return true;
     }
@@ -1911,7 +1699,7 @@ export function isCarSearchIntent(analysis, cars = []) {
         return false;
     }
 
-    return cars.length > 0;
+    return false;
 }
 
 export function buildCarsReply(analysis, cars, rawMessage = "", totalCars = null) {

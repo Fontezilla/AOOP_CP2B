@@ -156,9 +156,16 @@ def ask_rag(payload: RagAskRequest) -> RagAskResponse:
 
         relevant_chunks = build_ranked_rag_context(base_chunks, user_chunks)
         context = build_limited_context(relevant_chunks)
+
+        # Incluir histórico no prompt se existir
+        history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in (payload.history or [])
+        ]
+
         answer = ollama_chat(
             model=RAG_MODEL,
-            messages=[{"role": "user", "content": build_rag_prompt(payload.question, context)}],
+            messages=[{"role": "user", "content": build_rag_prompt(payload.question, context, history)}],
             temperature=0.2,
             timeout=OLLAMA_RAG_CHAT_TIMEOUT_SECONDS,
             num_predict=600,

@@ -8,12 +8,10 @@ def serialize_columns(columns: list[str] | None) -> str:
 def serialize_promptable_distinct_values(profile: dict[str, Any]) -> str:
     values_by_column = profile.get("distinctTextValuesByColumn") or {}
     lines = []
-
     if isinstance(values_by_column, dict):
         for column, values in values_by_column.items():
             if isinstance(values, list) and 0 < len(values) <= 20:
                 lines.append(f"  - {column}: {' | '.join(str(value) for value in values)}")
-
     return "\n".join(lines) if lines else "  - sem valores categoricos resumidos"
 
 
@@ -27,9 +25,10 @@ Contexto:
 - As colunas numericas para igualdade ou intervalos sao: {serialize_columns(profile.get("numericColumns"))}.
 - Valores reais conhecidos para colunas categoricas com poucos valores:
 {serialize_promptable_distinct_values(profile)}
-- "car_search" significa que o utilizador quer encontrar carros do inventario real da plataforma.
-- "technical_question" significa duvidas de manutencao, avarias, manuais, luzes, problemas ou explicacoes tecnicas.
-- "unknown" significa que a mensagem e ambigua e nao da para decidir com seguranca.
+
+- "car_search": o utilizador quer VER ou ENCONTRAR carros disponiveis para comprar. Exemplos: "quero um BMW azul", "carros abaixo de 15000 euros", "SUV automatico".
+- "technical_question": o utilizador tem uma DUVIDA, PROBLEMA ou quer saber como FUNCIONA algo. Exemplos: "como ligo as luzes de nevoeiro", "o motor faz barulho", "pressao dos pneus", "resume o manual". Mesmo que mencione uma marca, se for uma duvida tecnica e "technical_question". Tambem inclui resumos de documentos, perguntas sobre anexos ou conteudo de ficheiros carregados.
+- "unknown": nao da para perceber o que o utilizador quer.
 
 Regras:
 - Usa apenas nomes de colunas reais.
@@ -65,20 +64,34 @@ Mensagem:
 """
 
 
-def build_rag_prompt(question: str, context: str) -> str:
+def build_history_block(history: list[dict]) -> str:
+    if not history:
+        return ""
+
+    lines = ["Historico da conversa (para contexto):"]
+    for msg in history:
+        role = "Utilizador" if msg.get("role") == "user" else "Assistente"
+        content = str(msg.get("content", "")).strip()
+        if content:
+            lines.append(f"{role}: {content}")
+
+    return "\n".join(lines)
+
+
+def build_rag_prompt(question: str, context: str, history: list[dict] | None = None) -> str:
+    history_block = build_history_block(history or [])
+    history_section = f"\n{history_block}\n" if history_block else ""
+
     return f"""
 Responde em Portugues de Portugal (pt-PT), evita expressoes do portugues do Brasil.
-
 Usa apenas a informacao do contexto.
-
 Se o contexto tiver tabelas, interpreta os valores da tabela com cuidado.
-
-Se houver varios modelos, carroçarias, pneus ou velocidades, explica que a resposta depende dessa variante.
-
+Se houver varios modelos, carrocarias, pneus ou velocidades, explica que a resposta depende dessa variante.
+Se o contexto nao contiver informacao relevante sobre a pergunta, responde exatamente:
+"O documento carregado nao parece conter informacao relevante para esta pergunta. Por favor carrega um manual de automovel."
 Se nao souberes, diz exatamente que nao tens informacao suficiente no contexto recuperado.
-
 Responde de forma curta e pratica, em no maximo 6 passos.
-
+{history_section}
 Contexto:
 {context}
 

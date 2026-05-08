@@ -1,5 +1,4 @@
 from typing import Any
-
 from pydantic import BaseModel, Field
 
 
@@ -14,9 +13,15 @@ class RagUserChunk(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class RagHistoryMessage(BaseModel):
+    role: str  # "user" ou "assistant"
+    content: str
+
+
 class RagAskRequest(BaseModel):
     question: str
     user_chunks: list[RagUserChunk] = Field(default_factory=list)
+    history: list[RagHistoryMessage] = Field(default_factory=list)
 
 
 class RagSource(BaseModel):

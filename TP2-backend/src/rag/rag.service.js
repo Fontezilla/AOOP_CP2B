@@ -44,6 +44,7 @@ export async function getConversationRagChunks(userId, conversationId) {
     }
 
     const document = documents[0];
+
     const { data: chunks, error: chunksError } = await supabaseAdmin
         .from("document_chunks")
         .select("content, embedding")
@@ -67,7 +68,45 @@ export async function getConversationRagChunks(userId, conversationId) {
         .filter((chunk) => chunk.page_content && chunk.embedding.length > 0);
 }
 
+export async function getConversationHistory(conversationId, limit = 6) {
+    if (!conversationId) {
+        return [];
+    }
+
+    const { data: messages, error } = await supabaseAdmin
+        .from("messages")
+        .select("role, content")
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+    if (error || !Array.isArray(messages)) {
+        return [];
+    }
+
+    // Inverter para ordem cronológica e normalizar conteúdo
+    return messages
+        .reverse()
+        .map((msg) => {
+            // Mensagens do assistente são JSON { text, cars }
+            if (msg.role === "assistant") {
+                try {
+                    const parsed = JSON.parse(msg.content);
+                    return { role: "assistant", content: parsed.text || "" };
+                } catch {
+                    return { role: "assistant", content: msg.content || "" };
+                }
+            }
+            return { role: "user", content: msg.content || "" };
+        })
+        .filter((msg) => msg.content.trim().length > 0);
+}
+
 export async function askRAGForConversation(question, userId, conversationId) {
-    const userChunks = await getConversationRagChunks(userId, conversationId);
-    return askRagWithUserChunks(question, userChunks);
+    const [userChunks, history] = await Promise.all([
+        getConversationRagChunks(userId, conversationId),
+        getConversationHistory(conversationId),
+    ]);
+
+    return askRagWithUserChunks(question, userChunks, history);
 }
