@@ -283,8 +283,7 @@ def expand_query_terms(question: str) -> list[str]:
     return list(dict.fromkeys([*terms, *extra_terms]))
 
 
-def lexical_score(question: str, content: str) -> float:
-    terms = expand_query_terms(question)
+def lexical_score_with_terms(terms: list[str], content: str) -> float:
     normalized_content = normalize_search_text(content)
 
     if not terms or not normalized_content:
@@ -319,9 +318,10 @@ def chunk_identity(chunk: dict[str, Any]) -> tuple:
 
 def search_chunks_by_text(question: str, chunks: list[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
     scored = []
+    terms = expand_query_terms(question)
 
     for chunk in chunks:
-        score = lexical_score(question, chunk.get("page_content", ""))
+        score = lexical_score_with_terms(terms, chunk.get("page_content", ""))
         if score > 0:
             scored.append({
                 **chunk,

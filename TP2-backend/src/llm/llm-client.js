@@ -1,5 +1,4 @@
 import dotenv from "dotenv";
-
 dotenv.config();
 
 function getLlmServiceUrl() {
@@ -74,13 +73,16 @@ export async function analyzeQueryWithLlm(message, profile) {
 export async function askRagWithLlm(question) {
     return postToLlmService("/rag/ask", {
         question,
+        user_chunks: [],
+        history: [],
     });
 }
 
-export async function askRagWithUserChunks(question, userChunks = []) {
+export async function askRagWithUserChunks(question, userChunks = [], history = []) {
     return postToLlmService("/rag/ask", {
         question,
         user_chunks: userChunks,
+        history,
     });
 }
 
@@ -97,6 +99,6 @@ export async function checkLlmHealth() {
     if (!response.ok) {
         throw new Error(`LLM service healthcheck failed (${response.status})`);
     }
-
+    
     return response.json();
 }

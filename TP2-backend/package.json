@@ -8,8 +8,8 @@
     "start": "node src/server.js"
   },
   "dependencies": {
-    "@langchain/community": "^0.2.16",
-    "@langchain/core": "^0.2.36",
+    "@langchain/community": "^1.1.27",
+    "@langchain/core": "^1.1.44",
     "@supabase/supabase-js": "^2.49.8",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
